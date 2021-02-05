@@ -3,9 +3,12 @@ const router = express.Router();
 const mailgun = require("mailgun-js");
 require('dotenv').config();
 
-const {getProductByVendor} = require('../helpers/dataHelpers');
+const { getProductByVendor, getVendorList } = require('../helpers/dataHelpers');
 const {vendor_welcome} = require('../util/email/vendor_welcome');
-//const {vendor_product} = require('../util/email/vendor_product');
+const {product_reject} = require('../util/email/product_reject');
+const {vendor_reject} = require('../util/email/vendor_reject');
+const {vendor_approve} = require('../util/email/vendor_approve');
+
 
 const DOMAIN = `${process.env.DOMAIN}`;
 const api_key = `${process.env.API_KEY}`;
@@ -14,28 +17,25 @@ const mg = mailgun({
   domain: DOMAIN
 });
 
-/* To send email notifications */
-const sendEmail = (item, email, callback) => {
-  const data = {
-    from: 'noreply@allgoodservices.com',
-    to: email,
-    subject: 'Response from All Good Team',
-    html:`${callback(item)}`
-  }
-  mg.messages().send(data, function (error, body) {
-    console.log(body);
-  });
-}
+module.exports = ({ getUsers, getReviewers, getProducts, getVendorByEmail, addProduct,addVendor, getVendorIDByEmail, updateProduct, deleteProduct, updateStage }) => {
 
-module.exports = ({ getUsers, getProducts, getVendorByEmail, addVendor, getVendorIDByEmail, updateProduct, deleteProduct }) => {
-
-  /* GET users listing. */
+  /* GET vendor listing. */
   router.get('/', function(req, res) {
     getUsers()
       .then(users => res.json(users))
       .catch(err => res.json({ msg: err.message }))
   });
   
+   /* GET reviewer listing. */
+   router.get('/reviewers', function(req, res) {
+    getReviewers()
+      .then(reviewers => {
+        const formattedReviewers = getVendorList(reviewers);
+        res.json(formattedReviewers);
+      })
+      .catch(err => res.json({ msg: err.message }))
+  });
+
   /* GET vendor products */
   router.get('/products', function(req, res) {
     getProducts()
@@ -63,7 +63,6 @@ module.exports = ({ getUsers, getProducts, getVendorByEmail, addVendor, getVendo
       stageId, 
       reviewerId
     } = req.body;
-
     getVendorByEmail(email)
       .then(vendor => {
         if(vendor) {
@@ -71,7 +70,7 @@ module.exports = ({ getUsers, getProducts, getVendorByEmail, addVendor, getVendo
             msg: 'Sorry, a user account with this email already exists'
           });
         } else {
-          sendEmail(firstName, email, vendor_welcome);
+          vendor_welcome(mg, firstName, email);
           return addVendor(firstName, 
             lastName, 
             company, 
@@ -93,51 +92,102 @@ module.exports = ({ getUsers, getProducts, getVendorByEmail, addVendor, getVendo
       }));
   })
 
-  /* INSERT new products*/
-  // router.post('/products', (req, res) => {
-  //   const {
-  //     product_name, 
-  //     upc, 
-  //     ingredient, 
-  //     wholesale_price, 
-  //     retail_price, 
-  //     height, 
-  //     length, 
-  //     width, 
-  //     weight, 
-  //     inventory_threshold, 
-  //     stock_level, 
-  //     kit_or_bundle, 
-  //     vendor_email
-  //   } = req.body;
+  /* Send e-mail to vendor with attachments, and link to upload signed attachments post approval of vendor application */
+  router.put('/:id', (req, res) => {
+    const {
+      vendor_email,
+      url,
+      feedback,
+      vendor_stage
+    } = req.body.approved ? req.body.approved : req.body.declined;
 
-  //   getVendorIDByEmail(vendor_email)
-  //     .then(id => {
-  //       if(!id) {
-  //         res.json({
-  //           msg: 'Sorry, this user does not exist'
-  //         });
-  //       } else {
-  //         return addProduct(product_name, 
-  //           upc, 
-  //           ingredient, 
-  //           wholesale_price, 
-  //           retail_price, 
-  //           height, 
-  //           length, 
-  //           width, 
-  //           weight, 
-  //           inventory_threshold, 
-  //           stock_level, 
-  //           kit_or_bundle,
-  //           id)
-  //       }
-  //     })
-  //     .then(newVendor => res.json(newVendor))
-  //     .catch(err => res.json({
-  //       error: err.message
-  //     }));
-  // })
+    getVendorByEmail(vendor_email)
+      .then(vendor => {
+        if(!vendor) {
+          res.json({
+            msg: 'Sorry, this user does not exist'
+          });
+        } else {
+          if (feedback) {
+            product_reject(mg, vendor_email, url, feedback);
+          } else {
+            if (vendor_stage === 2) {
+              vendor_approve(mg, vendor_email, url);
+              updateStage(vendor.id, vendor_stage);
+            } else {
+              vendor_reject(mg, vendor_email);
+            }
+          }
+        }
+      })
+      .then(() => {
+        setTimeout(() => {
+          res.status(200).send('Message sent to vendor.');
+        }, 1000);
+      })
+      .catch(
+        err => res.json({error: err.message})
+      )
+  })
+
+
+  /* Reviewer to be notified when attachments are uploaded*/
+
+  /* Send e-mail to vendor with product form link */
+
+  /* Reviewer to be notified when product details are submitted*/
+
+  /* Send e-mail to vendor requesting shipment of products post approval of vendor product details */
+
+  /* Send e-mail to vendor post rejection of vendor product details, with link to edit product details */
+
+  /* Send e-mail to vendor once shipment has been recieved by AllGood*/
+
+  /* INSERT new products*/
+  router.post('/products', (req, res) => {
+    const {
+      product_name, 
+      upc, 
+      ingredient, 
+      wholesale_price, 
+      retail_price, 
+      height, 
+      length, 
+      width, 
+      weight, 
+      inventory_threshold, 
+      stock_level, 
+      kit_or_bundle, 
+      vendor_email
+    } = req.body;
+
+    getVendorIDByEmail(vendor_email)
+      .then(id => {
+        if(!id) {
+          res.json({
+            msg: 'Sorry, this user does not exist'
+          });
+        } else {
+          return addProduct(product_name, 
+            upc, 
+            ingredient, 
+            wholesale_price, 
+            retail_price, 
+            height, 
+            length, 
+            width, 
+            weight, 
+            inventory_threshold, 
+            stock_level, 
+            kit_or_bundle,
+            id)
+        }
+      })
+      .then(newVendor => res.json(newVendor))
+      .catch(err => res.json({
+        error: err.message
+      }));
+  })
 
   /* Edit the details of an existing Product */
   router.put('/products/:id', (req, res) => {
@@ -177,7 +227,7 @@ module.exports = ({ getUsers, getProducts, getVendorByEmail, addVendor, getVendo
         )}
     )
       .then(setTimeout(() => {
-        response.status(204).json({});
+        res.status(204).json({});
       }, 1000))
       .catch(err => res.json({
         error: err.message
@@ -190,7 +240,7 @@ module.exports = ({ getUsers, getProducts, getVendorByEmail, addVendor, getVendo
 
     deleteProduct(product_id)
     .then(setTimeout(() => {
-      response.status(204).json({});
+      res.status(204).json({});
     }, 1000))
     .catch(err => res.json({
       error: err.message
